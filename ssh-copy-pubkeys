@@ -1,0 +1,123 @@
+#!/usr/bin/python
+
+import sys
+import os
+import paramiko
+import multiprocessing
+import getpass
+import optparse
+import logging
+logging.basicConfig()
+
+def main():
+    opts, hosts, password = get_options()
+
+    logger = logging.getLogger("main")
+    logger.setLevel({
+        0: logging.WARNING,
+        1: logging.INFO,
+        2: logging.DEBUG}.get(opts.verbosity, logging.DEBUG))
+    if opts.verbosity > 2:
+        multiprocessing.log_to_stderr().setLevel({
+            3: logging.INFO,
+            4: logging.DEBUG,
+            5: multiprocessing.SUBDEBUG}.get(
+                opts.verbosity, multiprocessing.SUBDEBUG))
+                    
+    copy_keys(hosts, opts.login_name, password, opts.pubkeys)
+
+def get_options():
+    parser = optparse.OptionParser(usage="%prog [options] [HOSTFILE|HOST [HOST...]]")
+    parser.add_option("-k", "--pubkey",
+            action="append", dest="pubkeys", default=[],
+            metavar="FILE",
+            help=("The path to an SSH private key file.  "
+                "Can be specified more than once."))
+    parser.add_option("-l", "--login-name",
+            action="store", dest="login_name", default=getpass.getuser(),
+            metavar="NAME",
+            help=("The username to use when authenticating to hosts"))
+    parser.add_option("-v", "--verbose",
+            action="count", dest="verbosity", default=0,
+            help=("Enable verbose output.  Can be specified more than once."))
+
+    opts, args = parser.parse_args()
+
+    if not args:
+        hosts = (h.strip() for h in sys.stdin)
+    elif os.path.isfile(args[0]):
+        hosts = (h.strip() for h in file(args[0]))
+    else:
+        hosts = args
+        
+    HOME = os.environ["HOME"]
+    opts.pubkeys = opts.pubkeys or filter(os.path.isfile, 
+                                          [ "%s/.ssh/id_rsa.pub" % HOME,
+                                            "%s/.ssh/id_dsa.pub" % HOME,
+                                            "%s/.ssh/id_ecdsa.pub" % HOME, ])
+
+    if not opts.pubkeys:
+        parser.error("Could not find any public keys to copy.")
+
+    password = getpass.getpass()
+
+    return (opts, hosts, password)
+
+def do_copy(host, username, password, keys):
+    logger = logging.getLogger("main")
+
+    logger.debug("Connecting to %s" % host)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(host, username=username, password=password, allow_agent=False)
+
+    logger.debug("Setting up sftp session")
+    sftp = client.open_sftp()
+    try:
+        sftp.stat(".ssh")
+    except IOError, e:
+        if e.errno != 2:
+            raise
+
+        logger.debug("Creating ~/.ssh/")
+        sftp.mkdir(".ssh", mode="700")
+
+    authorized_keys = sftp.open(".ssh/authorized_keys", mode="a")
+    logger.info("Adding keys to %s" % host)
+    for key in keys:
+        logger.debug("Adding key %s to %s" % (key.strip(), host))
+        authorized_keys.write(file(key.strip()).read().strip()+"\n")
+
+    authorized_keys.close()
+    sftp.chmod(".ssh/authorized_keys", 0600)
+
+    sftp.close()
+
+    client.close()
+
+def _do_copy_wrapper(args):
+    logger = logging.getLogger("main")
+    try:
+        do_copy(*args)
+    except Exception, e:
+        logger.error("Caught exception whilst copying keys to %s: %r\n" % (host, e))
+        return 1
+    return 0
+
+def copy_keys(hosts, username, password, keys):
+
+    logger = logging.getLogger("main")
+    pool = multiprocessing.Pool(processes=10)
+
+    results = pool.map(_do_copy_wrapper, ((h, username, password, keys) for h in hosts))
+
+    failure = reduce((lambda status, acc: acc or status), results, False)
+
+    if failure:
+        logger.warn("Some hosts failed to copy.")
+
+    pool.close()
+    pool.join()
+
+if __name__ == '__main__':
+    main()

@@ -7,6 +7,7 @@ import multiprocessing
 import getpass
 import optparse
 import logging
+import traceback
 logging.basicConfig()
 
 def main():
@@ -24,7 +25,11 @@ def main():
             5: multiprocessing.SUBDEBUG}.get(
                 opts.verbosity, multiprocessing.SUBDEBUG))
                     
+    print "Copying keys...."
+
     copy_keys(hosts, opts.login_name, password, opts.pubkeys)
+
+    print "\n\nDone."
 
 def get_options():
     parser = optparse.OptionParser(usage="%prog [options] [HOSTFILE|HOST [HOST...]]")
@@ -80,7 +85,7 @@ def do_copy(host, username, password, keys):
             raise
 
         logger.debug("Creating ~/.ssh/")
-        sftp.mkdir(".ssh", mode="700")
+        sftp.mkdir(".ssh", mode=0700)
 
     authorized_keys = sftp.open(".ssh/authorized_keys", mode="a")
     logger.info("Adding keys to %s" % host)
@@ -100,7 +105,8 @@ def _do_copy_wrapper(args):
     try:
         do_copy(*args)
     except Exception, e:
-        logger.error("Caught exception whilst copying keys to %s: %r\n" % (host, e))
+        logger.error("Caught exception whilst copying keys to %s: %r\n" % (args[0], e))
+        logger.error(traceback.format_exc())
         return 1
     return 0
 

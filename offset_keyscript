@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -e
+test -n "${CRYPTTAB_KEY}"
+
+KEY_DEVICE=$(echo "${CRYPTTAB_KEY}" | cut -d: -f1)
+
+KEY_OFFSET=$(echo "${CRYPTTAB_KEY}" | cut -d: -f2)
+KEY_OFFSET="${KEY_OFFSET:-0}"
+
+KEY_SIZE=$(echo "${CRYPTTAB_KEY}"   | cut -d: -f3)
+KEY_SIZE="${KEY_SIZE:-512}"
+
+test -e "${KEY_DEVICE}"
+
+dd if="${KEY_DEVICE}" skip="${KEY_OFFSET}" bs=1k count=1 | head -c "${KEY_SIZE}"
